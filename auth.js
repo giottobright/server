@@ -1,10 +1,7 @@
 import jwt from 'jsonwebtoken';
 import { getDbConnection } from './db.js';
 
-const JWT_SECRET = process.env.JWT_SECRET;
-if (!JWT_SECRET) {
-  throw new Error('JWT_SECRET не установлен в переменных окружения');
-}
+const JWT_SECRET = process.env.JWT_SECRET || 'your-secret-key';
 
 export async function authenticateUser(telegramId) {
   const connection = await getDbConnection();
@@ -38,7 +35,7 @@ export async function authenticateUser(telegramId) {
       user = users[0];
     }
 
-    // Создаём JWT токен
+    // Создаём JWT токен с информацией о пользователе и accountId (идентификатор пары)
     const token = jwt.sign(
       { 
         userId: user.id,
@@ -60,7 +57,6 @@ export function authenticateMiddleware(req, res, next) {
   if (!token) {
     return res.status(401).json({ error: 'Требуется авторизация' });
   }
-
   try {
     const decoded = jwt.verify(token, JWT_SECRET);
     req.user = decoded;
