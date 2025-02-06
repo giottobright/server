@@ -29,26 +29,30 @@ export async function initDb() {
     await connection.end();
   }
 
-  export async function savePhotoRecord(photoUrl, comment, photoDate, location) {
+  export async function savePhotoRecord(photoUrl, comment, photoDate, location, accountId) {
     const connection = await getDbConnection();
     try {
-      console.log('Сохранение записи в БД:', {
-        photoUrl,
-        comment,
-        photoDate,
-        location
-      });
-  
       const query = `
-        INSERT INTO photos (s3_url, comment, photo_date, location)
-        VALUES (?, ?, ?, ?)
+        INSERT INTO photos (s3_url, comment, photo_date, location, account_id)
+        VALUES (?, ?, ?, ?, ?)
       `;
       
-      await connection.execute(query, [photoUrl, comment, photoDate, location]);
-      console.log('Запись успешно сохранена');
-    } catch (error) {
-      console.error('Ошибка сохранения в БД:', error);
-      throw error;
+      await connection.execute(query, [photoUrl, comment, photoDate, location, accountId]);
+    } finally {
+      await connection.end();
+    }
+  }
+  
+  export async function getPhotos(monthKey, accountId) {
+    const connection = await getDbConnection();
+    try {
+      const query = `
+        SELECT * FROM photos 
+        WHERE DATE_FORMAT(photo_date, '%Y-%m') = ? 
+        AND account_id = ?
+      `;
+      const [rows] = await connection.execute(query, [monthKey, accountId]);
+      return rows;
     } finally {
       await connection.end();
     }
