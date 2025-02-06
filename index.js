@@ -46,6 +46,18 @@ async function uploadFileToYandexS3(fileBuffer, originalName, mimetype) {
   }
 }
 
+if (process.env.NODE_ENV !== 'production') {
+  app.get('/api/auth/test-token', async (req, res) => {
+    try {
+      const { token, user } = await authenticateUser('test_user');
+      res.json({ token, accountId: user.account_id });
+    } catch (error) {
+      console.error('Ошибка получения тестового токена:', error);
+      res.status(500).json({ error: 'Ошибка получения тестового токена' });
+    }
+  });
+}
+
 // Проверка работоспособности сервера
 app.get('/', (req, res) => {
   res.json({ status: 'API работает' });
@@ -85,7 +97,7 @@ app.get('/api/auth/test-token', async (req, res) => {
 app.use('/api/photos', authenticateMiddleware);
 
 // Загрузка фото
-app.post('/api/photos', upload.single('photo'), async (req, res) => {
+app.post('/api/photos', authenticateMiddleware, upload.single('photo'), async (req, res) => {
   try {
     const { comment, date, location } = req.body;
     const accountId = req.user.accountId;
@@ -109,7 +121,7 @@ app.post('/api/photos', upload.single('photo'), async (req, res) => {
 });
 
 // Получение фотографий
-app.get('/api/photos', async (req, res) => {
+app.get('/api/photos', authenticateMiddleware, async (req, res) => {
   try {
     const { monthKey } = req.query;
     const accountId = req.user.accountId;
