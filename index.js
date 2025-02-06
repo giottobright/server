@@ -2,36 +2,31 @@ import express from 'express';
 import cors from 'cors';
 import dotenv from 'dotenv';
 import multer from 'multer';
-import s3 from './yandexS3.js'; // клиент для Yandex S3
+import s3 from './yandexS3.js';
 import { getDbConnection, savePhotoRecord, initDb } from './db.js';
-import { fileURLToPath } from 'url';
-import { dirname } from 'path';
 import { authenticateMiddleware, authenticateUser } from './auth.js';
-
-const __filename = fileURLToPath(import.meta.url);
-const __dirname = dirname(__filename);
 
 dotenv.config();
 
 const app = express();
-const port = process.env.PORT || 3013;
+const port = process.env.PORT || 3021;
 
-app.use(cors());
+// Настройка CORS для разработки: разрешаем запросы с фронтенда (обычно Create React App работает на localhost:3000)
+app.use(cors({
+  origin: process.env.FRONTEND_URL || 'http://localhost:3002',
+  methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'],
+  allowedHeaders: ['Content-Type', 'Authorization'],
+  credentials: true
+}));
+
 app.use(express.json());
 app.use(express.urlencoded({ extended: true }));
 
-// Инициализация базы данных
-initDb().then(() => {
-  console.log('База данных и таблица photos инициализированы');
-}).catch(err => {
-  console.error('Ошибка инициализации базы данных:', err);
-});
-
-// Инициализируем multer для хранения файла в памяти
+// Настройка multer для хранения файлов в памяти
 const storage = multer.memoryStorage();
 const upload = multer({ storage });
 
-// Функция загрузки файла в Yandex S3
+// Функция загрузки файла в S3 (Yandex Object Storage)
 async function uploadFileToYandexS3(fileBuffer, originalName, mimetype) {
   const fileName = `photos/${Date.now()}-${originalName}`;
   const params = {
@@ -39,22 +34,28 @@ async function uploadFileToYandexS3(fileBuffer, originalName, mimetype) {
     Key: fileName,
     Body: fileBuffer,
     ContentType: mimetype,
-    ACL: 'public-read' // публичный доступ, если требуется
+    ACL: 'public-read'
   };
 
-  const result = await s3.upload(params).promise();
-  return result.Location; // URL загруженного файла
+  try {
+    const result = await s3.upload(params).promise();
+    return result.Location;
+  } catch (error) {
+    console.error('Ошибка загрузки в S3:', error);
+    throw new Error('Ошибка загрузки файла');
+  }
 }
 
-// Новый роут для проверки "здоровья" сервера
-app.get('/api/health', (req, res) => {
-  res.status(200).json({ 
-    status: 'ok', 
-    timestamp: Date.now() 
-  });
+// Проверка работоспособности сервера
+app.get('/', (req, res) => {
+  res.json({ status: 'API работает' });
 });
 
-// Маршрут аутентификации через Telegram
+app.get('/api/health', (req, res) => {
+  res.json({ status: 'ok' });
+});
+
+// Роут для авторизации через Telegram
 app.post('/api/auth/telegram', async (req, res) => {
   try {
     const { telegramId } = req.body;
@@ -65,18 +66,29 @@ app.post('/api/auth/telegram', async (req, res) => {
     res.json({ token, accountId: user.account_id });
   } catch (error) {
     console.error('Ошибка аутентификации:', error);
-    res.status(500).json({ error: 'Ошибка сервера' });
+    res.status(500).json({ error: 'Ошибка сервера при аутентификации' });
   }
 });
 
-// Защищаем последующие маршруты через middleware аутентификации
-app.use('/api', authenticateMiddleware);
+// Тестовый токен (только для разработки)
+app.get('/api/auth/test-token', async (req, res) => {
+  try {
+    const { token, user } = await authenticateUser('test_user');
+    res.json({ token, accountId: user.account_id });
+  } catch (error) {
+    console.error('Ошибка получения тестового токена:', error);
+    res.status(500).json({ error: 'Ошибка получения тестового токена' });
+  }
+});
 
-// Роут для загрузки фото (доступен только для аутентифицированных пользователей)
+// Применяем middleware аутентификации для защищенных маршрутов
+app.use('/api/photos', authenticateMiddleware);
+
+// Загрузка фото
 app.post('/api/photos', upload.single('photo'), async (req, res) => {
   try {
     const { comment, date, location } = req.body;
-    const accountId = req.user.accountId; // Получаем accountId из токена
+    const accountId = req.user.accountId;
 
     if (!req.file) {
       return res.status(400).json({ error: 'Файл не найден' });
@@ -96,57 +108,37 @@ app.post('/api/photos', upload.single('photo'), async (req, res) => {
   }
 });
 
-// Пример роутов для раздачи статики (если требуется)
-app.use(express.static('public'));
-
-app.get('/', (req, res) => {
-  res.send('Сервер работает!');
-});
-
+// Получение фотографий
 app.get('/api/photos', async (req, res) => {
   try {
-    const { month } = req.query;
+    const { monthKey } = req.query;
+    const accountId = req.user.accountId;
+    
     const connection = await getDbConnection();
-    let query = "SELECT * FROM photos";
-    let params = [];
-    if (month) {
-      // Фильтруем по месяцу (предполагается формат "YYYY-MM")
-      query = "SELECT * FROM photos WHERE DATE_FORMAT(photo_date, '%Y-%m') = ?";
-      params = [month];
-    }
-    const [rows] = await connection.execute(query, params);
+    const [photos] = await connection.execute(
+      'SELECT * FROM photos WHERE account_id = ? AND DATE_FORMAT(photo_date, "%Y-%m") = ? ORDER BY photo_date DESC',
+      [accountId, monthKey]
+    );
     await connection.end();
-    res.json({ success: true, photos: rows });
+    
+    res.json({ photos });
   } catch (error) {
-    console.error("Ошибка получения фотографий:", error);
-    res.status(500).json({ success: false, error: error.message });
+    console.error('Ошибка получения фото:', error);
+    res.status(500).json({ error: 'Ошибка получения фотографий' });
   }
 });
 
-// Роут для связывания аккаунтов (участников пары)
-app.post('/api/accounts/link', async (req, res) => {
-  try {
-    const { targetTelegramId } = req.body;
-    const sourceAccountId = req.user.accountId;
+// Обработка ошибок
+app.use((err, req, res, next) => {
+  console.error(err.stack);
+  res.status(500).json({ error: 'Что-то пошло не так!' });
+});
 
-    const connection = await getDbConnection();
-    await connection.execute(
-      'UPDATE users SET account_id = ? WHERE telegram_id = ?',
-      [sourceAccountId, targetTelegramId]
-    );
-    await connection.end();
-    res.json({ success: true });
-  } catch (error) {
-    console.error('Ошибка связывания аккаунтов:', error);
-    res.status(500).json({ error: error.message });
-  }
+// Инициализация базы данных при запуске
+initDb().catch(err => {
+  console.error('Ошибка инициализации БД:', err);
 });
 
 app.listen(port, () => {
-  console.log('Сервер запущен на порту ${port}');
-}).on('error', (err) => {
-  if (err.code === 'EADDRINUSE') {
-    console.error('Порт ${port} уже используется. Попробуйте другой порт.');
-    process.exit(1);
-  }
+  console.log(`Сервер запущен на порту ${port}`);
 });
