@@ -1,15 +1,19 @@
-// index.js
 import express from 'express';
 import cors from 'cors';
 import dotenv from 'dotenv';
 import multer from 'multer';
 import s3 from './yandexS3.js';  // клиент для Yandex S3
 import { savePhotoRecord, initDb } from './db.js';
+import { fileURLToPath } from 'url';
+import { dirname } from 'path';
+
+const __filename = fileURLToPath(import.meta.url);
+const __dirname = dirname(__filename);
 
 dotenv.config();
 
 const app = express();
-const port = process.env.PORT || 3000;
+const port = process.env.PORT || 3014;  // Используем порт 3013
 
 initDb().then(() => {
   console.log('База данных и таблица photos инициализированы');
@@ -40,6 +44,14 @@ async function uploadFileToYandexS3(fileBuffer, originalName, mimetype) {
   return result.Location; // URL загруженного файла
 }
 
+// Новый роут для проверки "здоровья" сервера
+app.get('/api/health', (req, res) => {
+  res.status(200).json({ 
+    status: 'ok', 
+    timestamp: Date.now() 
+  });
+});
+
 // Новый роут для загрузки фото
 app.post('/api/photos', upload.single('photo'), async (req, res) => {
   try {
@@ -64,8 +76,9 @@ app.post('/api/photos', upload.single('photo'), async (req, res) => {
 
 // Пример роутов для раздачи статики (если требуется)
 app.use(express.static('public'));
+
 app.get('/', (req, res) => {
-  res.sendFile(__dirname + '/public/index.html');
+  res.send('Сервер работает!');
 });
 
 app.listen(port, () => {
