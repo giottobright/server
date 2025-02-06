@@ -13,13 +13,15 @@ const __dirname = dirname(__filename);
 dotenv.config();
 
 const app = express();
-const port = process.env.PORT || 3014;  // Используем порт 3013
+const port = process.env.PORT || 3014;
 
-initDb().then(() => {
-  console.log('База данных и таблица photos инициализированы');
-}).catch(err => {
-  console.error('Ошибка инициализации базы данных:', err);
-});
+initDb()
+  .then(() => {
+    console.log('База данных и таблица photos инициализированы');
+  })
+  .catch(err => {
+    console.error('Ошибка инициализации базы данных:', err.stack);
+  });
 
 app.use(cors());
 app.use(express.json());
@@ -31,30 +33,26 @@ const upload = multer({ storage });
 
 // Функция загрузки файла в Yandex S3
 async function uploadFileToYandexS3(fileBuffer, originalName, mimetype) {
-  const fileName = `photos/${Date.now()}-${originalName}`; // создаём уникальное имя
+  const fileName = `photos/${Date.now()}-${originalName}`;
   const params = {
     Bucket: process.env.S3_BUCKET_NAME,
     Key: fileName,
     Body: fileBuffer,
     ContentType: mimetype,
-    ACL: 'public-read', // если нужно сделать файл общедоступным
+    ACL: 'public-read',
   };
 
   const result = await s3.upload(params).promise();
-  return result.Location; // URL загруженного файла
+  return result.Location;
 }
 
-// Новый роут для проверки "здоровья" сервера
+// Роут для проверки "здоровья" сервера
 app.get('/api/health', (req, res) => {
-  res.status(200).json({ 
-    status: 'ok', 
-    timestamp: Date.now() 
-  });
+  res.status(200).json({ status: 'ok', timestamp: Date.now() });
 });
 
-// Новый роут для загрузки фото
-// Обработчик загрузки фото с расширенным логированием
-app.post('/api/photos', upload.single('photo'), async (req, res) => {
+// Роут для загрузки фото с подробным логированием ошибок
+app.post('/api/photos', upload.single('photo'), async (req, res, next) => {
   console.log("Запрос POST /api/photos получен.");
   console.log("Тело запроса (req.body):", req.body);
   console.log("Файл из запроса (req.file):", req.file);
@@ -65,7 +63,6 @@ app.post('/api/photos', upload.single('photo'), async (req, res) => {
   }
 
   try {
-    // Подготовка параметров для загрузки в Yandex S3
     const { buffer, originalname, mimetype } = req.file;
     console.log("Параметры файла:", {
       originalname,
@@ -77,9 +74,8 @@ app.post('/api/photos', upload.single('photo'), async (req, res) => {
     const photoUrl = await uploadFileToYandexS3(buffer, originalname, mimetype);
     console.log("Файл успешно загружен в S3. Полученный URL:", photoUrl);
 
-    // Логирование данных для записи в БД
     const { comment, date, location } = req.body;
-    console.log("Подготовка данных для сохранения в БД:", {
+    console.log("Данные для сохранения в БД:", {
       photoUrl,
       comment,
       date,
@@ -91,19 +87,20 @@ app.post('/api/photos', upload.single('photo'), async (req, res) => {
 
     res.status(201).json({ success: true, photoUrl });
   } catch (error) {
-    console.error("Ошибка при загрузке фото:", error);
-    res.status(500).json({ success: false, error: error.message });
+    console.error("Ошибка при загрузке фото:", error.stack);
+    // Передаём ошибку в глобальный обработчик
+    next(error);
   }
 });
 
-app.get('/api/photos', async (req, res) => {
+// Другой пример: роут для получения фотографий
+app.get('/api/photos', async (req, res, next) => {
   try {
     const { month } = req.query;
     const connection = await getDbConnection();
     let query = "SELECT * FROM photos";
     let params = [];
     if (month) {
-      // Фильтруем по месяцу (предполагается формат "YYYY-MM")
       query = "SELECT * FROM photos WHERE DATE_FORMAT(photo_date, '%Y-%m') = ?";
       params = [month];
     }
@@ -111,16 +108,21 @@ app.get('/api/photos', async (req, res) => {
     await connection.end();
     res.json({ success: true, photos: rows });
   } catch (error) {
-    console.error("Ошибка получения фотографий:", error);
-    res.status(500).json({ success: false, error: error.message });
+    console.error("Ошибка получения фотографий:", error.stack);
+    next(error);
   }
 });
 
-// Пример роутов для раздачи статики (если требуется)
+// Настройка раздачи статических файлов
 app.use(express.static('public'));
-
 app.get('/', (req, res) => {
   res.send('Сервер работает!');
+});
+
+// Глобальный обработчик ошибок
+app.use((err, req, res, next) => {
+  console.error("Глобальная ошибка:", err.stack);
+  res.status(500).json({ success: false, error: err.message });
 });
 
 app.listen(port, () => {
