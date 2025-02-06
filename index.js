@@ -3,7 +3,7 @@ import cors from 'cors';
 import dotenv from 'dotenv';
 import multer from 'multer';
 import s3 from './yandexS3.js';  // клиент для Yandex S3
-import { savePhotoRecord, initDb } from './db.js';
+import { getDbConnection, savePhotoRecord, initDb } from './db.js';
 import { fileURLToPath } from 'url';
 import { dirname } from 'path';
 
