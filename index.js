@@ -18,6 +18,7 @@ const port = process.env.PORT || 3013;
 
 app.use(cors());
 app.use(express.json());
+app.use(express.urlencoded({ extended: true }));
 
 // Инициализация базы данных
 initDb().then(() => {
@@ -44,6 +45,14 @@ async function uploadFileToYandexS3(fileBuffer, originalName, mimetype) {
   const result = await s3.upload(params).promise();
   return result.Location; // URL загруженного файла
 }
+
+// Новый роут для проверки "здоровья" сервера
+app.get('/api/health', (req, res) => {
+  res.status(200).json({ 
+    status: 'ok', 
+    timestamp: Date.now() 
+  });
+});
 
 // Маршрут аутентификации через Telegram
 app.post('/api/auth/telegram', async (req, res) => {
@@ -87,6 +96,33 @@ app.post('/api/photos', upload.single('photo'), async (req, res) => {
   }
 });
 
+// Пример роутов для раздачи статики (если требуется)
+app.use(express.static('public'));
+
+app.get('/', (req, res) => {
+  res.send('Сервер работает!');
+});
+
+app.get('/api/photos', async (req, res) => {
+  try {
+    const { month } = req.query;
+    const connection = await getDbConnection();
+    let query = "SELECT * FROM photos";
+    let params = [];
+    if (month) {
+      // Фильтруем по месяцу (предполагается формат "YYYY-MM")
+      query = "SELECT * FROM photos WHERE DATE_FORMAT(photo_date, '%Y-%m') = ?";
+      params = [month];
+    }
+    const [rows] = await connection.execute(query, params);
+    await connection.end();
+    res.json({ success: true, photos: rows });
+  } catch (error) {
+    console.error("Ошибка получения фотографий:", error);
+    res.status(500).json({ success: false, error: error.message });
+  }
+});
+
 // Роут для связывания аккаунтов (участников пары)
 app.post('/api/accounts/link', async (req, res) => {
   try {
@@ -107,5 +143,10 @@ app.post('/api/accounts/link', async (req, res) => {
 });
 
 app.listen(port, () => {
-  console.log(`Сервер запущен на порту ${port}`);
+  console.log('Сервер запущен на порту ${port}');
+}).on('error', (err) => {
+  if (err.code === 'EADDRINUSE') {
+    console.error('Порт ${port} уже используется. Попробуйте другой порт.');
+    process.exit(1);
+  }
 });
