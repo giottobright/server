@@ -29,12 +29,27 @@ export async function initDb() {
     await connection.end();
   }
 
-export async function savePhotoRecord(photoUrl, comment, photoDate, location) {
-  const connection = await getDbConnection();
-  const query = `
-    INSERT INTO photos (s3_url, comment, photo_date, location)
-    VALUES (?, ?, ?, ?)
-  `;
-  await connection.execute(query, [photoUrl, comment, photoDate, location]);
-  await connection.end();
-}
+  export async function savePhotoRecord(photoUrl, comment, photoDate, location) {
+    const connection = await getDbConnection();
+    try {
+      console.log('Сохранение записи в БД:', {
+        photoUrl,
+        comment,
+        photoDate,
+        location
+      });
+  
+      const query = `
+        INSERT INTO photos (s3_url, comment, photo_date, location)
+        VALUES (?, ?, ?, ?)
+      `;
+      
+      await connection.execute(query, [photoUrl, comment, photoDate, location]);
+      console.log('Запись успешно сохранена');
+    } catch (error) {
+      console.error('Ошибка сохранения в БД:', error);
+      throw error;
+    } finally {
+      await connection.end();
+    }
+  }
