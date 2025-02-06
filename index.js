@@ -4,7 +4,7 @@ import cors from 'cors';
 import dotenv from 'dotenv';
 import multer from 'multer';
 import s3 from './yandexS3.js';  // клиент для Yandex S3
-import { savePhotoRecord } from './db.js';
+import { savePhotoRecord, initDb } from './db.js';
 
 dotenv.config();
 
@@ -70,4 +70,9 @@ app.get('/', (req, res) => {
 
 app.listen(port, () => {
   console.log(`Сервер запущен на порту ${port}`);
+}).on('error', (err) => {
+  if (err.code === 'EADDRINUSE') {
+    console.error(`Порт ${port} уже используется. Попробуйте другой порт.`);
+    process.exit(1);
+  }
 });
