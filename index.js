@@ -90,13 +90,21 @@ app.post('/api/auth/telegram', async (req, res) => {
     if (!telegramId) {
       return res.status(400).json({ error: 'Требуется telegram_id' });
     }
-    const { token, user } = await authenticateUser(telegramId);
-    res.json({ token, accountId: user.account_id });
+
+    const result = await authenticateUser(telegramId);
+
+    if (!result.exists) {
+      return res.json({ exists: false });  // ✅ Теперь API НЕ создает пользователя автоматически
+    }
+
+    res.json({ token: result.token, accountId: result.user.account_id, exists: true });
+
   } catch (error) {
     console.error('Ошибка аутентификации:', error);
     res.status(500).json({ error: 'Ошибка сервера при аутентификации' });
   }
 });
+
 
 // Тестовый токен (только для разработки)
 app.get('/api/auth/test-token', async (req, res) => {

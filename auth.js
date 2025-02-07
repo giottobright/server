@@ -5,112 +5,93 @@ import crypto from 'crypto';
 const JWT_SECRET = process.env.NODE_ENV === 'production' 
     ? process.env.JWT_SECRET 
     : process.env.TEST_JWT_SECRET;
-const INVITE_CODE_EXPIRY = 24 * 60 * 60 * 1000; // 24 hours
+const INVITE_CODE_EXPIRY = 24 * 60 * 60 * 1000; // 24 часа
 
-export async function createTestUser() {
-    if (process.env.NODE_ENV === 'production') {
-        throw new Error('Test authentication not available in production');
-    }
-
+/**
+ * Проверка, существует ли пользователь в базе данных.
+ * @param {string} telegramId - Telegram ID пользователя.
+ * @returns {Promise<boolean>} - true, если пользователь есть, false, если нет.
+ */
+export async function checkUserExists(telegramId) {
     const connection = await getDbConnection();
     try {
         const [users] = await connection.execute(
-            'SELECT * FROM users WHERE telegram_id = ?',
-            [process.env.TEST_TELEGRAM_ID]
+            'SELECT id FROM users WHERE telegram_id = ?',
+            [telegramId]
         );
-
-        if (users.length > 0) {
-            return users[0];
-        }
-
-        const [accountResult] = await connection.execute(
-            'INSERT INTO accounts (name) VALUES (?)',
-            ['Test Account']
-        );
-        const accountId = accountResult.insertId;
-
-        const [userResult] = await connection.execute(
-            'INSERT INTO users (telegram_id, account_id) VALUES (?, ?)',
-            [process.env.TEST_TELEGRAM_ID, accountId]
-        );
-
-        return {
-            id: userResult.insertId,
-            telegram_id: process.env.TEST_TELEGRAM_ID,
-            account_id: accountId
-        };
+        return users.length > 0;
     } finally {
         await connection.end();
     }
 }
 
+/**
+ * Аутентификация пользователя (без автоматического создания).
+ * @param {string} telegramId - Telegram ID пользователя.
+ * @returns {Promise<object>} - { exists: true/false, token, user }
+ */
 export async function authenticateUser(telegramId) {
     const connection = await getDbConnection();
-    
     try {
-        if (process.env.NODE_ENV !== 'production' && telegramId === process.env.TEST_TELEGRAM_ID) {
-            const testUser = await createTestUser();
-            const token = jwt.sign(
-                {
-                    userId: testUser.id,
-                    telegramId: testUser.telegram_id,
-                    accountId: testUser.account_id
-                },
-                JWT_SECRET,
-                { expiresIn: '7d' }
-            );
-            return { token, user: testUser };
-        }
-
         const [users] = await connection.execute(
             'SELECT * FROM users WHERE telegram_id = ?',
             [telegramId]
         );
 
         if (users.length === 0) {
-            const [accountResult] = await connection.execute(
-                'INSERT INTO accounts (name) VALUES (?)',
-                [`Telegram User ${telegramId}`]
-            );
-            
-            const accountId = accountResult.insertId;
-            
-            const [userResult] = await connection.execute(
-                'INSERT INTO users (telegram_id, account_id) VALUES (?, ?)',
-                [telegramId, accountId]
-            );
-            
-            const newUser = {
-                id: userResult.insertId,
-                telegram_id: telegramId,
-                account_id: accountId
-            };
-            
-            const token = jwt.sign(
-                { userId: newUser.id, telegramId, accountId },
-                JWT_SECRET,
-                { expiresIn: '7d' }
-            );
-            
-            return { token, user: newUser };
+            return { exists: false };  // ✅ Не создаем пользователя автоматически
         }
 
         const user = users[0];
-        const token = jwt.sign(
-            { userId: user.id, telegramId, accountId: user.account_id },
-            JWT_SECRET,
-            { expiresIn: '7d' }
-        );
-        
-        return { token, user };
+        const token = generateToken(user);
+
+        return { exists: true, token, user };
     } finally {
         await connection.end();
     }
 }
 
+/**
+ * Создание нового пользователя.
+ * @param {string} telegramId - Telegram ID пользователя.
+ * @returns {Promise<object>} - Новый пользователь + токен.
+ */
+export async function createNewAccount(telegramId) {
+    const connection = await getDbConnection();
+    try {
+        const [accountResult] = await connection.execute(
+            'INSERT INTO accounts (name) VALUES (?)',
+            [`Account ${telegramId}`]
+        );
+
+        const accountId = accountResult.insertId;
+
+        const [userResult] = await connection.execute(
+            'INSERT INTO users (telegram_id, account_id) VALUES (?, ?)',
+            [telegramId, accountId]
+        );
+
+        const newUser = {
+            id: userResult.insertId,
+            telegram_id: telegramId,
+            account_id: accountId
+        };
+
+        const token = generateToken(newUser);
+
+        return { token, user: newUser };
+    } finally {
+        await connection.end();
+    }
+}
+
+/**
+ * Генерация инвайт-кода.
+ * @param {number} userId - ID пользователя.
+ * @returns {Promise<string>} - Код приглашения.
+ */
 export async function generateInviteCode(userId) {
     const connection = await getDbConnection();
-    
     try {
         const [users] = await connection.execute(
             'SELECT * FROM users WHERE id = ?',
@@ -123,7 +104,7 @@ export async function generateInviteCode(userId) {
 
         const user = users[0];
         const inviteCode = crypto.randomBytes(16).toString('hex');
-        
+
         await connection.execute(
             'INSERT INTO invite_codes (code, account_id, expires_at) VALUES (?, ?, ?)',
             [inviteCode, user.account_id, new Date(Date.now() + INVITE_CODE_EXPIRY)]
@@ -135,9 +116,14 @@ export async function generateInviteCode(userId) {
     }
 }
 
+/**
+ * Присоединение к аккаунту с помощью инвайт-кода.
+ * @param {string} telegramId - Telegram ID пользователя.
+ * @param {string} inviteCode - Код приглашения.
+ * @returns {Promise<object>} - Данные нового пользователя.
+ */
 export async function joinWithInviteCode(telegramId, inviteCode) {
     const connection = await getDbConnection();
-    
     try {
         const [codes] = await connection.execute(
             'SELECT * FROM invite_codes WHERE code = ? AND expires_at > NOW() AND used = 0',
@@ -182,6 +168,11 @@ export async function joinWithInviteCode(telegramId, inviteCode) {
     }
 }
 
+/**
+ * Генерация JWT-токена.
+ * @param {object} user - Данные пользователя.
+ * @returns {string} - JWT-токен.
+ */
 function generateToken(user) {
     return jwt.sign(
         {
@@ -194,9 +185,12 @@ function generateToken(user) {
     );
 }
 
+/**
+ * Middleware для проверки аутентификации.
+ */
 export function authenticateMiddleware(req, res, next) {
     const token = req.headers.authorization?.split(' ')[1];
-    
+
     if (!token) {
         return res.status(401).json({ error: 'Authentication required' });
     }
