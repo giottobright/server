@@ -189,6 +189,61 @@ app.post('/api/auth/join', async (req, res) => {
       res.status(400).json({ error: error.message });
   }
 });
+
+// Проверка существования пользователя
+app.post('/api/auth/check-user', async (req, res) => {
+  try {
+    const { telegramId } = req.body;
+    const connection = await getDbConnection();
+    const [users] = await connection.execute(
+      'SELECT id FROM users WHERE telegram_id = ?',
+      [telegramId]
+    );
+    await connection.end();
+    res.json({ exists: users.length > 0 });
+  } catch (error) {
+    console.error('Error checking user:', error);
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// Создание нового аккаунта
+app.post('/api/auth/create-account', async (req, res) => {
+  try {
+    const { telegramId } = req.body;
+    const connection = await getDbConnection();
+    
+    const [accountResult] = await connection.execute(
+      'INSERT INTO accounts (name) VALUES (?)',
+      [`Account ${telegramId}`]
+    );
+    
+    const accountId = accountResult.insertId;
+    
+    const [userResult] = await connection.execute(
+      'INSERT INTO users (telegram_id, account_id) VALUES (?, ?)',
+      [telegramId, accountId]
+    );
+    
+    const user = {
+      id: userResult.insertId,
+      telegram_id: telegramId,
+      account_id: accountId
+    };
+    
+    const token = jwt.sign(
+      { userId: user.id, telegramId, accountId },
+      JWT_SECRET,
+      { expiresIn: '7d' }
+    );
+    
+    await connection.end();
+    res.json({ token, user });
+  } catch (error) {
+    console.error('Error creating account:', error);
+    res.status(500).json({ error: error.message });
+  }
+});
 // Инициализация базы данных при запуске
 initDb().catch(err => {
   console.error('Ошибка инициализации БД:', err);
