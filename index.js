@@ -13,7 +13,7 @@ const port = process.env.PORT || 3021;
 
 // Настройка CORS для разработки: разрешаем запросы с фронтенда (обычно Create React App работает на localhost:3000)
 app.use(cors({
-  origin: process.env.FRONTEND_URL || 'http://localhost:3002',
+  origin: process.env.FRONTEND_URL || 'http://localhost:3000',
   methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'],
   allowedHeaders: ['Content-Type', 'Authorization'],
   credentials: true
@@ -44,6 +44,22 @@ async function uploadFileToYandexS3(fileBuffer, originalName, mimetype) {
     console.error('Ошибка загрузки в S3:', error);
     throw new Error('Ошибка загрузки файла');
   }
+}
+
+if (process.env.NODE_ENV !== 'production') {
+  app.post('/api/auth/test-login', async (req, res) => {
+      try {
+          const { token, user } = await authenticateUser(process.env.TEST_TELEGRAM_ID);
+          res.json({ 
+              token, 
+              accountId: user.account_id,
+              testMode: true
+          });
+      } catch (error) {
+          console.error('Test authentication error:', error);
+          res.status(500).json({ error: error.message });
+      }
+  });
 }
 
 if (process.env.NODE_ENV !== 'production') {
@@ -146,6 +162,33 @@ app.use((err, req, res, next) => {
   res.status(500).json({ error: 'Что-то пошло не так!' });
 });
 
+// Generate invite code
+app.post('/api/auth/invite-code', authenticateMiddleware, async (req, res) => {
+  try {
+      const inviteCode = await generateInviteCode(req.user.userId);
+      res.json({ inviteCode });
+  } catch (error) {
+      console.error('Error generating invite code:', error);
+      res.status(500).json({ error: error.message });
+  }
+});
+
+// Join with invite code
+app.post('/api/auth/join', async (req, res) => {
+  try {
+      const { telegramId, inviteCode } = req.body;
+      
+      if (!telegramId || !inviteCode) {
+          return res.status(400).json({ error: 'Telegram ID and invite code required' });
+      }
+
+      const result = await joinWithInviteCode(telegramId, inviteCode);
+      res.json(result);
+  } catch (error) {
+      console.error('Error joining with invite code:', error);
+      res.status(400).json({ error: error.message });
+  }
+});
 // Инициализация базы данных при запуске
 initDb().catch(err => {
   console.error('Ошибка инициализации БД:', err);
