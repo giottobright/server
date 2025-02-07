@@ -87,41 +87,56 @@ export async function authenticateUser(telegramId) {
     const connection = await getDbConnection();
     
     try {
-        // Check if user exists
-        const [users] = await connection.execute(
-            'SELECT * FROM users WHERE telegram_id = ?',
-            [telegramId]
+      const [users] = await connection.execute(
+        'SELECT * FROM users WHERE telegram_id = ?',
+        [telegramId]
+      );
+  
+      if (users.length === 0) {
+        // Если пользователь не найден, создаем новый аккаунт или используем существующий
+        const [accountResult] = await connection.execute(
+          'INSERT INTO accounts (name) VALUES (?)',
+          [`Пользователь ${telegramId}`]
         );
-
-        let user;
-        if (users.length === 0) {
-            // Create new account for first user
-            const [accountResult] = await connection.execute(
-                'INSERT INTO accounts (name) VALUES (?)',
-                [`Account for ${telegramId}`]
-            );
-            const accountId = accountResult.insertId;
-
-            // Create user
-            const [userResult] = await connection.execute(
-                'INSERT INTO users (telegram_id, account_id) VALUES (?, ?)',
-                [telegramId, accountId]
-            );
-            
-            user = {
-                id: userResult.insertId,
-                telegram_id: telegramId,
-                account_id: accountId
-            };
-        } else {
-            user = users[0];
-        }
-
-        // Create JWT token
-        const token = generateToken(user);
+        const accountId = accountResult.insertId;
+  
+        const [userResult] = await connection.execute(
+          'INSERT INTO users (telegram_id, account_id) VALUES (?, ?)',
+          [telegramId, accountId]
+        );
+  
+        const newUser = {
+          id: userResult.insertId,
+          telegram_id: telegramId,
+          account_id: accountId
+        };
+  
+        const token = jwt.sign(
+          {
+            userId: newUser.id,
+            telegramId: newUser.telegram_id,
+            accountId: newUser.account_id
+          },
+          JWT_SECRET,
+          { expiresIn: '7d' }
+        );
+  
+        return { token, user: newUser };
+      } else {
+        const user = users[0];
+        const token = jwt.sign(
+          {
+            userId: user.id,
+            telegramId: user.telegram_id,
+            accountId: user.account_id
+          },
+          JWT_SECRET,
+          { expiresIn: '7d' }
+        );
         return { token, user };
+      }
     } finally {
-        await connection.end();
+      await connection.end();
     }
 }
 
